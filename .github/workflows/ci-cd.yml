@@ -1,0 +1,90 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  SERVICE: patent-drafter
+  REGION: asia-south1        # Mumbai — same region as the Turso db (ap-south-1)
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # CI: syntax + offline end-to-end smoke test (LLM mocked, no API key needed)
+  # ---------------------------------------------------------------------------
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Syntax check
+        run: python -m py_compile main.py config.py database.py auth.py models.py prompts/*.py services/*.py routers/*.py
+
+      - name: Smoke test (offline, LLM mocked)
+        env:
+          ANTHROPIC_API_KEY: sk-ant-ci-test
+          JWT_SECRET: ci-test-secret
+        run: python tests/test_smoke.py
+
+  # ---------------------------------------------------------------------------
+  # CD: deploy to Cloud Run via Cloud Build (only on main; skips until secrets set)
+  # ---------------------------------------------------------------------------
+  deploy:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Gate on deploy secrets
+        id: gate
+        env:
+          PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+          KEY: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          if [ -z "$PROJECT" ] || [ -z "$KEY" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Deploy skipped — add GCP_PROJECT_ID and GCP_SA_KEY repo secrets to enable Cloud Run deploys."
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - id: auth
+        if: steps.gate.outputs.ready == 'true'
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - if: steps.gate.outputs.ready == 'true'
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy to Cloud Run
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          MODEL="${{ secrets.ANTHROPIC_MODEL }}"; MODEL="${MODEL:-claude-sonnet-4-6}"
+          # ^##^ makes gcloud split env vars on '##' so JWT/token values with
+          # commas or special chars are safe.
+          gcloud run deploy "$SERVICE" \
+            --source . \
+            --project "${{ secrets.GCP_PROJECT_ID }}" \
+            --region "$REGION" \
+            --allow-unauthenticated \
+            --memory 1Gi --cpu 1 --max-instances 1 --min-instances 0 --timeout 300 \
+            --set-env-vars "^##^ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}##JWT_SECRET=${{ secrets.JWT_SECRET }}##ANTHROPIC_MODEL=${MODEL}##TURSO_DATABASE_URL=${{ secrets.TURSO_DATABASE_URL }}##TURSO_AUTH_TOKEN=${{ secrets.TURSO_AUTH_TOKEN }}"
+
+      - name: Show service URL
+        if: steps.gate.outputs.ready == 'true'
+        run: gcloud run services describe "$SERVICE" --project "${{ secrets.GCP_PROJECT_ID }}" --region "$REGION" --format='value(status.url)'
