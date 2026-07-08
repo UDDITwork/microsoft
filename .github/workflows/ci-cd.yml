@@ -33,10 +33,12 @@ jobs:
       - name: Syntax check
         run: python -m py_compile main.py config.py database.py auth.py models.py prompts/*.py services/*.py routers/*.py
 
-      - name: Smoke test (offline, LLM mocked)
+      - name: Smoke test (LLM mocked; storage against real Turso)
         env:
           ANTHROPIC_API_KEY: sk-ant-ci-test
           JWT_SECRET: ci-test-secret
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
         run: python tests/test_smoke.py
 
   # ---------------------------------------------------------------------------

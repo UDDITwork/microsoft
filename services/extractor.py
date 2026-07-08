@@ -11,7 +11,7 @@ import json
 import re
 from typing import AsyncIterator, Optional
 
-import aiosqlite
+import database
 
 from prompts import extraction_prompts as ep
 from services import llm
@@ -141,14 +141,14 @@ async def _extract_simple(prompt_template: str, source_text: str, content_type: 
 # Persistence
 # ---------------------------------------------------------------------------
 
-async def _clear_previous(conn: aiosqlite.Connection, session_id: str, user_id: int) -> None:
+async def _clear_previous(conn: database.Connection, session_id: str, user_id: int) -> None:
     await conn.execute(
         "DELETE FROM extracted_content WHERE chat_session_id = ? AND user_id = ?",
         (session_id, user_id),
     )
 
 
-async def _insert_rows(conn: aiosqlite.Connection, session_id: str, user_id: int, rows: list[tuple]) -> None:
+async def _insert_rows(conn: database.Connection, session_id: str, user_id: int, rows: list[tuple]) -> None:
     for content_type, text, claim_no, meta in rows:
         await conn.execute(
             """INSERT INTO extracted_content
@@ -158,7 +158,7 @@ async def _insert_rows(conn: aiosqlite.Connection, session_id: str, user_id: int
         )
 
 
-async def _select_sources(conn: aiosqlite.Connection, session_id: str, user_id: int) -> tuple[str, str]:
+async def _select_sources(conn: database.Connection, session_id: str, user_id: int) -> tuple[str, str]:
     """Return (claims_source_text, idf_source_text) from uploaded docs."""
     cur = await conn.execute(
         "SELECT doc_type, raw_text FROM uploaded_documents WHERE chat_session_id = ? AND user_id = ?",
@@ -177,7 +177,7 @@ async def _select_sources(conn: aiosqlite.Connection, session_id: str, user_id: 
 # ---------------------------------------------------------------------------
 
 async def run_extraction_pipeline(
-    conn: aiosqlite.Connection, session_id: str, user_id: int
+    conn: database.Connection, session_id: str, user_id: int
 ) -> AsyncIterator[dict]:
     """
     Async generator yielding progress events. Persists results as they complete.

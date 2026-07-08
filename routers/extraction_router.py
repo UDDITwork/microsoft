@@ -1,5 +1,4 @@
 """Read endpoints for extracted content."""
-import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException
 
 import auth
@@ -18,7 +17,7 @@ async def _require_session(conn, session_id, user_id):
 async def get_extracted(
     session_id: str,
     user: dict = Depends(auth.get_current_user),
-    conn: aiosqlite.Connection = Depends(database.get_conn),
+    conn: database.Connection = Depends(database.get_conn),
 ):
     await _require_session(conn, session_id, user["user_id"])
     cur = await conn.execute(
@@ -41,7 +40,7 @@ async def get_extracted(
 async def get_claims(
     session_id: str,
     user: dict = Depends(auth.get_current_user),
-    conn: aiosqlite.Connection = Depends(database.get_conn),
+    conn: database.Connection = Depends(database.get_conn),
 ):
     await _require_session(conn, session_id, user["user_id"])
     cur = await conn.execute(

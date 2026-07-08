@@ -1,8 +1,17 @@
 """
-Offline end-to-end smoke test (LLM layer mocked — no network / API key needed).
+End-to-end smoke test (LLM layer mocked — no Anthropic API key needed).
 
-Run locally:   python tests/test_smoke.py
-Run in CI:     see .github/workflows/ci-cd.yml
+Storage runs against the real Turso database (TURSO_DATABASE_URL / TURSO_AUTH_TOKEN
+must be set in the environment). The test is written to be SAFE against a shared
+production database:
+  * identities are randomized per run (no UNIQUE-username collisions across runs),
+  * the shared `background` instruction prompt is snapshotted and restored around
+    the prompt-update check (never leaves prod mutated),
+  * every user / session / document / message / section it creates is deleted in a
+    cleanup pass at the end (runs even on failure).
+
+Run locally:   (set TURSO_* + JWT_SECRET, then)  python tests/test_smoke.py
+Run in CI:     see .github/workflows/ci-cd.yml (Turso secrets injected)
 
 Validates: boot, DB init, auth, user + session isolation, upload, doc-type
 detection, extraction persistence, routing, dependency enforcement (Technical
@@ -12,22 +21,34 @@ import io
 import os
 import sys
 import json
+import uuid
 import asyncio
 import tempfile
 from pathlib import Path
 
-# --- Isolate storage + set env BEFORE importing the app ----------------------
+# --- Env BEFORE importing the app --------------------------------------------
+# Uploaded-file copies go to a throwaway local dir (local disk is fine for the
+# .docx originals — the source of truth is the parsed text stored in Turso).
 _tmp = tempfile.mkdtemp()
-os.environ["DATABASE_PATH"] = os.path.join(_tmp, "test.db")
 os.environ["UPLOAD_DIR"] = os.path.join(_tmp, "uploads")
+os.makedirs(os.environ["UPLOAD_DIR"], exist_ok=True)
 os.environ.setdefault("JWT_SECRET", "test-secret")
 os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-test")
+
+if not os.environ.get("TURSO_DATABASE_URL") or not os.environ.get("TURSO_AUTH_TOKEN"):
+    print("FAIL - TURSO_DATABASE_URL and TURSO_AUTH_TOKEN must be set for the smoke test.")
+    sys.exit(1)
 
 PROJECT_ROOT = str(Path(__file__).resolve().parents[1])
 sys.path.insert(0, PROJECT_ROOT)
 
 from docx import Document
 from services import llm
+
+# Unique per-run identities so repeated CI runs never collide on UNIQUE(username).
+RUN = uuid.uuid4().hex[:10]
+USER_A = f"alice_{RUN}"
+USER_B = f"bob_{RUN}"
 
 
 # --- Mock the LLM layer ------------------------------------------------------
@@ -95,17 +116,17 @@ def check(name, cond):
 r = client.get("/api/health")
 check("health ok", r.status_code == 200 and r.json()["status"] == "ok")
 
-ra = client.post("/api/auth/register", json={"username": "alice", "password": "secret1"})
-rb = client.post("/api/auth/register", json={"username": "bob", "password": "secret2"})
+ra = client.post("/api/auth/register", json={"username": USER_A, "password": "secret1"})
+rb = client.post("/api/auth/register", json={"username": USER_B, "password": "secret2"})
 check("register alice", ra.status_code == 200)
 check("register bob", rb.status_code == 200)
 tok_a = ra.json()["access_token"]
 tok_b = rb.json()["access_token"]
 
 check("duplicate username rejected",
-      client.post("/api/auth/register", json={"username": "alice", "password": "x123456"}).status_code == 409)
+      client.post("/api/auth/register", json={"username": USER_A, "password": "x123456"}).status_code == 409)
 check("wrong password rejected",
-      client.post("/api/auth/login", json={"username": "alice", "password": "nope"}).status_code == 401)
+      client.post("/api/auth/login", json={"username": USER_A, "password": "nope"}).status_code == 401)
 
 rs = client.post("/api/sessions", json={}, headers=hdr(tok_a))
 check("create session", rs.status_code == 200)
@@ -194,15 +215,50 @@ check("sections list has technical_problems", "technical_problems" in secs)
 
 check("messages persisted", len(client.get(f"/api/sessions/{sid}/messages", headers=hdr(tok_a)).json()) >= 8)
 
-check("6 instruction prompts seeded", len(client.get("/api/prompts", headers=hdr(tok_a)).json()) == 6)
+prompts = client.get("/api/prompts", headers=hdr(tok_a)).json()
+check("6 instruction prompts seeded", len(prompts) == 6)
+# instruction_prompts is a SHARED/global table — snapshot the real background
+# prompt so we can restore it after mutating (never leave prod changed).
+_orig_bg = next((p["system_prompt"] for p in prompts if p["section_type"] == "background"), None)
 pu = client.put("/api/prompts/background", json={"system_prompt": "NEW BACKGROUND PROMPT"}, headers=hdr(tok_a))
 check("update prompt", pu.status_code == 200 and pu.json()["system_prompt"] == "NEW BACKGROUND PROMPT")
+if _orig_bg is not None:
+    rr = client.put("/api/prompts/background", json={"system_prompt": _orig_bg}, headers=hdr(tok_a))
+    check("background prompt restored", rr.status_code == 200 and rr.json()["system_prompt"] == _orig_bg)
 
 sid2 = client.post("/api/sessions", json={}, headers=hdr(tok_b)).json()["id"]
 check("bob new session has no extracted content",
       len(client.get(f"/api/sessions/{sid2}/extracted", headers=hdr(tok_b)).json()) == 0)
 
 check("unauth blocked", client.get("/api/sessions").status_code == 401)
+
+
+# --- Cleanup: remove everything this run created from the shared Turso DB -----
+async def _cleanup():
+    conn = await database.get_db()
+    try:
+        cur = await conn.execute(
+            "SELECT id FROM users WHERE username IN (?, ?)", (USER_A, USER_B)
+        )
+        uids = [r["id"] for r in await cur.fetchall()]
+        for uid in uids:
+            # Delete children explicitly (don't rely on cascade), then session, then user.
+            for tbl in ("extracted_content", "chat_messages", "generated_sections",
+                        "uploaded_documents", "chat_sessions"):
+                await conn.execute(f"DELETE FROM {tbl} WHERE user_id = ?", (uid,))
+            await conn.execute("DELETE FROM users WHERE id = ?", (uid,))
+        await conn.commit()
+        return len(uids)
+    finally:
+        await conn.close()
+
+
+try:
+    n_cleaned = asyncio.run(_cleanup())
+    check("cleanup removed test users", n_cleaned == 2)
+except Exception as exc:  # noqa: BLE001
+    check(f"cleanup removed test users (error: {exc})", False)
+
 
 print("\n==== SUMMARY ====")
 passed = sum(1 for _, c in results if c)

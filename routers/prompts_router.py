@@ -4,7 +4,6 @@ Admin endpoints for instruction prompts (hot-swappable drafting instructions).
 Any authenticated user may read/update the shared instruction prompts. These are
 global (not per-session): they define HOW each section is drafted.
 """
-import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException
 
 import auth
@@ -18,7 +17,7 @@ router = APIRouter(prefix="/api/prompts", tags=["prompts"])
 @router.get("", response_model=list[PromptResponse])
 async def list_prompts(
     user: dict = Depends(auth.get_current_user),
-    conn: aiosqlite.Connection = Depends(database.get_conn),
+    conn: database.Connection = Depends(database.get_conn),
 ):
     cur = await conn.execute(
         "SELECT section_type, system_prompt, updated_at FROM instruction_prompts ORDER BY section_type"
@@ -35,7 +34,7 @@ async def update_prompt(
     section_type: str,
     req: UpdatePromptRequest,
     user: dict = Depends(auth.get_current_user),
-    conn: aiosqlite.Connection = Depends(database.get_conn),
+    conn: database.Connection = Depends(database.get_conn),
 ):
     if section_type not in SECTION_TYPES:
         raise HTTPException(status_code=400, detail=f"Unknown section_type '{section_type}'")

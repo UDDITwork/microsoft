@@ -8,14 +8,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# SQLite database + uploaded files live under /data (mount a volume for persistence)
-RUN mkdir -p /data /data/uploads
-
-ENV DATABASE_PATH=/data/patent_drafter.db
-ENV UPLOAD_DIR=/data/uploads
+# All persistence is in Turso (remote libSQL). Only ephemeral upload copies are
+# written to local disk (source of truth is the parsed text stored in Turso).
+ENV UPLOAD_DIR=/tmp/uploads
 ENV PORT=8080
 
 EXPOSE 8080
 
-# Single worker: SQLite + in-process state require one process on Cloud Run.
+# Single worker keeps in-process SSE/stream state on one process on Cloud Run.
 CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080} --workers 1"]

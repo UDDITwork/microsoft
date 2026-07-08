@@ -1,13 +1,20 @@
 """
-SQLite persistence layer (async via aiosqlite).
+Turso (libSQL) persistence layer.
 
 Owns: connection lifecycle, schema creation, indexes, and seeding of the
 instruction_prompts table with hot-swappable placeholder prompts.
 
+There is no local SQLite file — every environment (local dev, CI, Cloud Run)
+talks to the same remote Turso database via TURSO_DATABASE_URL/TURSO_AUTH_TOKEN.
+The `libsql` client library is synchronous, so every call is offloaded to a
+thread via `asyncio.to_thread` to keep the async request lifecycle non-blocking.
+
 Every user-facing table carries both chat_session_id and user_id so that all
 reads can be scoped to (session, user) for hard isolation.
 """
-import aiosqlite
+import asyncio
+
+import libsql
 
 import config
 
@@ -131,10 +138,78 @@ SEED_PROMPTS = {
 }
 
 
-async def get_db() -> aiosqlite.Connection:
-    """Open a new connection with row factory + foreign keys enabled."""
-    conn = await aiosqlite.connect(config.DATABASE_PATH)
-    conn.row_factory = aiosqlite.Row
+class Row:
+    """Dict-and-index accessible row, mimicking aiosqlite.Row (libsql rows are plain tuples)."""
+
+    __slots__ = ("_data", "_index")
+
+    def __init__(self, data: tuple, columns: list[str]):
+        self._data = data
+        self._index = {name: i for i, name in enumerate(columns)}
+
+    def __getitem__(self, key):
+        if isinstance(key, str):
+            return self._data[self._index[key]]
+        return self._data[key]
+
+    def keys(self):
+        return list(self._index.keys())
+
+    def __repr__(self):
+        return f"Row({dict(zip(self._index.keys(), self._data))})"
+
+
+class Cursor:
+    """Thin async wrapper around a libsql (sync) cursor result."""
+
+    def __init__(self, raw_cursor):
+        self._cursor = raw_cursor
+        self._columns = [d[0] for d in (raw_cursor.description or [])]
+
+    async def fetchone(self) -> "Row | None":
+        row = await asyncio.to_thread(self._cursor.fetchone)
+        return Row(row, self._columns) if row is not None else None
+
+    async def fetchall(self) -> list["Row"]:
+        rows = await asyncio.to_thread(self._cursor.fetchall)
+        return [Row(r, self._columns) for r in rows]
+
+    @property
+    def lastrowid(self):
+        return self._cursor.lastrowid
+
+
+class Connection:
+    """Thin async wrapper around a libsql (sync) connection to Turso."""
+
+    def __init__(self, raw_conn):
+        self._conn = raw_conn
+
+    async def execute(self, sql: str, parameters: tuple = ()) -> Cursor:
+        raw_cursor = await asyncio.to_thread(self._conn.execute, sql, parameters)
+        return Cursor(raw_cursor)
+
+    async def executescript(self, sql_script: str) -> None:
+        await asyncio.to_thread(self._conn.executescript, sql_script)
+
+    async def commit(self) -> None:
+        await asyncio.to_thread(self._conn.commit)
+
+    async def close(self) -> None:
+        await asyncio.to_thread(self._conn.close)
+
+
+async def get_db() -> Connection:
+    """Open a new connection to the Turso database with foreign keys enabled."""
+    if not config.TURSO_DATABASE_URL or not config.TURSO_AUTH_TOKEN:
+        raise RuntimeError(
+            "TURSO_DATABASE_URL and TURSO_AUTH_TOKEN must be set — all storage is "
+            "managed by the Turso cloud database (no local SQLite fallback)."
+        )
+    raw = await asyncio.to_thread(
+        libsql.connect, database=config.TURSO_DATABASE_URL, auth_token=config.TURSO_AUTH_TOKEN
+    )
+    conn = Connection(raw)
     await conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
@@ -148,7 +223,7 @@ async def get_conn():
         await conn.close()
 
 
-async def session_owned_by(conn: aiosqlite.Connection, session_id: str, user_id: int) -> bool:
+async def session_owned_by(conn: Connection, session_id: str, user_id: int) -> bool:
     """Isolation guard: True only if this session belongs to this user."""
     cur = await conn.execute(
         "SELECT 1 FROM chat_sessions WHERE id = ? AND user_id = ?",
@@ -159,7 +234,6 @@ async def session_owned_by(conn: aiosqlite.Connection, session_id: str, user_id:
 
 async def init_db() -> None:
     """Create schema, indexes, and seed instruction prompts. Idempotent."""
-    config.ensure_dirs()
     conn = await get_db()
     try:
         await conn.executescript(SCHEMA)

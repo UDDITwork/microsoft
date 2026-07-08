@@ -6,7 +6,7 @@ phases: **(1) Document Upload & Extraction** and **(2) Section-by-Section Drafti
 via chat**. Every piece of data is isolated per **user** and per **chat session** —
 User A never sees User B's data, and Session 1 never leaks into Session 2.
 
-- **Backend:** Python FastAPI + async SQLite (`aiosqlite`)
+- **Backend:** Python FastAPI + Turso cloud database (libSQL, via the `libsql` client)
 - **AI:** Anthropic Claude (configurable model, streaming)
 - **Frontend:** single self-contained SPA (`static/index.html`, vanilla JS)
 - **Deploy:** Docker → Google Cloud Run
@@ -71,9 +71,11 @@ python -m venv .venv
 # macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
 
-cp .env.example .env        # then edit ANTHROPIC_API_KEY + JWT_SECRET
+cp .env.example .env        # then edit ANTHROPIC_API_KEY + JWT_SECRET + TURSO_*
 export ANTHROPIC_API_KEY=sk-ant-...      # or set via .env / your shell
 export JWT_SECRET=$(python -c "import secrets;print(secrets.token_hex(32))")
+export TURSO_DATABASE_URL=libsql://your-db.turso.io
+export TURSO_AUTH_TOKEN=...
 
 uvicorn main:app --host 0.0.0.0 --port 8080
 ```
@@ -93,26 +95,29 @@ docker build -t patent-drafter .
 docker run -p 8080:8080 \
   -e ANTHROPIC_API_KEY=sk-ant-... \
   -e JWT_SECRET=$(python -c "import secrets;print(secrets.token_hex(32))") \
-  -v $(pwd)/data:/data \
+  -e TURSO_DATABASE_URL=libsql://your-db.turso.io \
+  -e TURSO_AUTH_TOKEN=... \
   patent-drafter
 ```
 
 ## Google Cloud Run
 
 ```bash
-gcloud builds submit --tag gcr.io/PROJECT_ID/patent-drafter
 gcloud run deploy patent-drafter \
-  --image gcr.io/PROJECT_ID/patent-drafter \
-  --region us-central1 --platform managed --allow-unauthenticated \
+  --source . \
+  --region asia-south1 --platform managed --allow-unauthenticated \
   --memory 1Gi --cpu 1 --max-instances 1 --min-instances 0 --timeout 300 \
-  --set-env-vars ANTHROPIC_API_KEY=sk-ant-...,JWT_SECRET=...,ANTHROPIC_MODEL=claude-sonnet-5
+  --set-env-vars ANTHROPIC_API_KEY=sk-ant-...,JWT_SECRET=...,ANTHROPIC_MODEL=claude-sonnet-5,TURSO_DATABASE_URL=libsql://your-db.turso.io,TURSO_AUTH_TOKEN=...
 ```
 
-**Persistence:** SQLite lives at `/data/patent_drafter.db`. On Cloud Run, mount a
-Cloud Storage FUSE volume (or persistent disk) at `/data`, otherwise the DB and
-uploads are lost on container restart. Keep **`--max-instances 1`** for SQLite —
-multiple instances would each get their own database file. For real multi-instance
-production, migrate to Cloud SQL (PostgreSQL).
+(In this repo, deploys are automated — see `.github/workflows/ci-cd.yml`, which
+deploys on every push to `main` once the GCP + app secrets are set.)
+
+**Persistence:** all state lives in the **Turso** cloud database (libSQL) — there is
+no local SQLite file, so nothing is lost on container restart and the service is
+stateless. Uploaded `.docx` originals are written to ephemeral container storage for
+traceability only; the parsed text stored in Turso is the source of truth. Keep
+**`--max-instances 1`** so in-process SSE/streaming state stays on one process.
 
 ---
 

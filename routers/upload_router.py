@@ -9,7 +9,6 @@ import json
 import os
 import uuid
 
-import aiosqlite
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
@@ -35,7 +34,7 @@ async def upload_documents(
     session_id: str,
     files: list[UploadFile] = File(...),
     user: dict = Depends(auth.get_current_user),
-    conn: aiosqlite.Connection = Depends(database.get_conn),
+    conn: database.Connection = Depends(database.get_conn),
 ):
     await _require_session(conn, session_id, user["user_id"])
 
@@ -98,7 +97,7 @@ def _write_file(path: str, data: bytes) -> None:
 async def list_documents(
     session_id: str,
     user: dict = Depends(auth.get_current_user),
-    conn: aiosqlite.Connection = Depends(database.get_conn),
+    conn: database.Connection = Depends(database.get_conn),
 ):
     await _require_session(conn, session_id, user["user_id"])
     cur = await conn.execute(
@@ -117,7 +116,7 @@ async def list_documents(
 async def run_extraction(
     session_id: str,
     user: dict = Depends(auth.get_current_user),
-    conn: aiosqlite.Connection = Depends(database.get_conn),
+    conn: database.Connection = Depends(database.get_conn),
 ):
     """Kick off the extraction pipeline and stream progress as SSE."""
     await _require_session(conn, session_id, user["user_id"])
@@ -153,7 +152,7 @@ async def run_extraction(
 async def extraction_status(
     session_id: str,
     user: dict = Depends(auth.get_current_user),
-    conn: aiosqlite.Connection = Depends(database.get_conn),
+    conn: database.Connection = Depends(database.get_conn),
 ):
     await _require_session(conn, session_id, user["user_id"])
     cur = await conn.execute(

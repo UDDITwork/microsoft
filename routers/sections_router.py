@@ -1,5 +1,4 @@
 """Read endpoints for generated sections."""
-import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException
 
 import auth
@@ -18,7 +17,7 @@ async def _require_session(conn, session_id, user_id):
 async def list_sections(
     session_id: str,
     user: dict = Depends(auth.get_current_user),
-    conn: aiosqlite.Connection = Depends(database.get_conn),
+    conn: database.Connection = Depends(database.get_conn),
 ):
     """Latest version of each generated section type."""
     await _require_session(conn, session_id, user["user_id"])
@@ -49,7 +48,7 @@ async def get_section(
     session_id: str,
     section_type: str,
     user: dict = Depends(auth.get_current_user),
-    conn: aiosqlite.Connection = Depends(database.get_conn),
+    conn: database.Connection = Depends(database.get_conn),
 ):
     """Latest version of one section type."""
     await _require_session(conn, session_id, user["user_id"])

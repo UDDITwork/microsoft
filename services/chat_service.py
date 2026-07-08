@@ -8,9 +8,8 @@ section was requested — a versioned row in generated_sections.
 import json
 from typing import AsyncIterator, Optional
 
-import aiosqlite
-
 import config
+import database
 from services import llm
 from services import section_router_logic as router
 
@@ -123,7 +122,7 @@ async def _maybe_set_title(conn, session_id, user_id, message: str) -> None:
 
 
 async def stream_chat_turn(
-    conn: aiosqlite.Connection,
+    conn: database.Connection,
     session_id: str,
     user_id: int,
     message: str,

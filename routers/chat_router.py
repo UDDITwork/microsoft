@@ -1,7 +1,6 @@
 """Chat endpoint (SSE streaming) + paginated message history."""
 import json
 
-import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
@@ -18,7 +17,7 @@ async def chat(
     session_id: str,
     req: ChatRequest,
     user: dict = Depends(auth.get_current_user),
-    conn: aiosqlite.Connection = Depends(database.get_conn),
+    conn: database.Connection = Depends(database.get_conn),
 ):
     if not await database.session_owned_by(conn, session_id, user["user_id"]):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -54,7 +53,7 @@ async def get_messages(
     limit: int = Query(200, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     user: dict = Depends(auth.get_current_user),
-    conn: aiosqlite.Connection = Depends(database.get_conn),
+    conn: database.Connection = Depends(database.get_conn),
 ):
     if not await database.session_owned_by(conn, session_id, user["user_id"]):
         raise HTTPException(status_code=404, detail="Session not found")

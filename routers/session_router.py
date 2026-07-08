@@ -1,7 +1,6 @@
 """Chat session CRUD, scoped to the authenticated user."""
 import uuid
 
-import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException
 
 import auth
@@ -25,7 +24,7 @@ def _row_to_session(row) -> SessionResponse:
 @router.get("", response_model=list[SessionResponse])
 async def list_sessions(
     user: dict = Depends(auth.get_current_user),
-    conn: aiosqlite.Connection = Depends(database.get_conn),
+    conn: database.Connection = Depends(database.get_conn),
 ):
     cur = await conn.execute(
         """SELECT id, title, created_at, updated_at, status, extraction_status
@@ -41,7 +40,7 @@ async def list_sessions(
 async def create_session(
     req: CreateSessionRequest,
     user: dict = Depends(auth.get_current_user),
-    conn: aiosqlite.Connection = Depends(database.get_conn),
+    conn: database.Connection = Depends(database.get_conn),
 ):
     session_id = str(uuid.uuid4())
     title = req.title or "New Session"
@@ -62,7 +61,7 @@ async def create_session(
 async def get_session(
     session_id: str,
     user: dict = Depends(auth.get_current_user),
-    conn: aiosqlite.Connection = Depends(database.get_conn),
+    conn: database.Connection = Depends(database.get_conn),
 ):
     cur = await conn.execute(
         """SELECT id, title, created_at, updated_at, status, extraction_status
@@ -79,7 +78,7 @@ async def get_session(
 async def delete_session(
     session_id: str,
     user: dict = Depends(auth.get_current_user),
-    conn: aiosqlite.Connection = Depends(database.get_conn),
+    conn: database.Connection = Depends(database.get_conn),
 ):
     if not await database.session_owned_by(conn, session_id, user["user_id"]):
         raise HTTPException(status_code=404, detail="Session not found")

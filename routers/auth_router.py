@@ -1,5 +1,4 @@
 """Auth endpoints: register, login, logout."""
-import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, status
 
 import auth
@@ -10,7 +9,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
 @router.post("/register", response_model=TokenResponse)
-async def register(req: RegisterRequest, conn: aiosqlite.Connection = Depends(database.get_conn)):
+async def register(req: RegisterRequest, conn: database.Connection = Depends(database.get_conn)):
     cur = await conn.execute("SELECT id FROM users WHERE username = ?", (req.username,))
     if await cur.fetchone():
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already taken")
@@ -27,7 +26,7 @@ async def register(req: RegisterRequest, conn: aiosqlite.Connection = Depends(da
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(req: LoginRequest, conn: aiosqlite.Connection = Depends(database.get_conn)):
+async def login(req: LoginRequest, conn: database.Connection = Depends(database.get_conn)):
     cur = await conn.execute(
         "SELECT id, password_hash FROM users WHERE username = ?", (req.username,)
     )

@@ -8,7 +8,7 @@ reports whether the request is blocked by an unmet dependency.
 from dataclasses import dataclass, field
 from typing import Optional
 
-import aiosqlite
+import database
 
 # Mandatory behavioural rules injected into EVERY drafting system prompt.
 BEHAVIORAL_RULES = """BEHAVIORAL RULES — MANDATORY FOR EVERY RESPONSE:
@@ -70,7 +70,7 @@ class DraftingContext:
 
 # --- DB helpers --------------------------------------------------------------
 
-async def _get_instruction_prompt(conn: aiosqlite.Connection, section_type: str) -> str:
+async def _get_instruction_prompt(conn: database.Connection, section_type: str) -> str:
     cur = await conn.execute(
         "SELECT system_prompt FROM instruction_prompts WHERE section_type = ?",
         (section_type,),
@@ -134,7 +134,7 @@ def _fmt(label: str, value: Optional[str]) -> str:
 
 
 async def build_drafting_context(
-    conn: aiosqlite.Connection,
+    conn: database.Connection,
     session_id: str,
     user_id: int,
     section_type: Optional[str],

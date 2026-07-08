@@ -1,6 +1,9 @@
 """
-Central configuration. All values are read from environment variables with
-sensible local-dev defaults so the app runs out of the box and is Cloud Run ready.
+Central configuration. All values are read from environment variables.
+
+Storage is managed entirely by the Turso cloud database (libSQL) — there is no
+local SQLite file. TURSO_DATABASE_URL and TURSO_AUTH_TOKEN are required in every
+environment that talks to the database.
 """
 import os
 from pathlib import Path
@@ -18,8 +21,14 @@ ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 MAX_TOKENS_EXTRACTION = int(os.getenv("MAX_TOKENS_EXTRACTION", "8000"))
 MAX_TOKENS_DRAFTING = int(os.getenv("MAX_TOKENS_DRAFTING", "8000"))
 
-# --- Storage -----------------------------------------------------------------
-DATABASE_PATH = os.getenv("DATABASE_PATH", str(Path(__file__).parent / "data" / "patent_drafter.db"))
+# --- Storage (Turso / libSQL cloud database) ---------------------------------
+# All persistence lives in Turso. No local database file is ever created.
+TURSO_DATABASE_URL = os.getenv("TURSO_DATABASE_URL", "")
+TURSO_AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "")
+
+# Uploaded .docx originals are written here for traceability only (the parsed
+# raw_text stored in Turso is the source of truth, so this dir is disposable —
+# ephemeral container storage on Cloud Run is fine).
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", str(Path(__file__).parent / "data" / "uploads"))
 
 # --- Auth --------------------------------------------------------------------
@@ -42,6 +51,5 @@ API_RETRY_BASE_DELAY = 2.0  # seconds
 
 
 def ensure_dirs() -> None:
-    """Create data + upload directories if they do not exist."""
-    Path(DATABASE_PATH).parent.mkdir(parents=True, exist_ok=True)
+    """Create the upload directory if it does not exist (no DB dir — Turso is remote)."""
     Path(UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
